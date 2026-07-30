@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		40067D28301B01AF00D91973 /* ATProtoKit in Frameworks */ = {isa = PBXBuildFile; productRef = 40067D27301B01AF00D91973 /* ATProtoKit */; };
+		40067D2B301B01DD00D91973 /* ATIdentityTools in Frameworks */ = {isa = PBXBuildFile; productRef = 40067D2A301B01DD00D91973 /* ATIdentityTools */; };
+		40067D2D301B01DD00D91973 /* DIDCore in Frameworks */ = {isa = PBXBuildFile; productRef = 40067D2C301B01DD00D91973 /* DIDCore */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		40067CEF301AFA0900D91973 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -65,6 +71,9 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				40067D2D301B01DD00D91973 /* DIDCore in Frameworks */,
+				40067D28301B01AF00D91973 /* ATProtoKit in Frameworks */,
+				40067D2B301B01DD00D91973 /* ATIdentityTools in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -125,6 +134,9 @@
 			);
 			name = Willow;
 			packageProductDependencies = (
+				40067D27301B01AF00D91973 /* ATProtoKit */,
+				40067D2A301B01DD00D91973 /* ATIdentityTools */,
+				40067D2C301B01DD00D91973 /* DIDCore */,
 			);
 			productName = Willow;
 			productReference = 40067CDD301AFA0800D91973 /* Willow.app */;
@@ -208,6 +220,10 @@
 			);
 			mainGroup = 40067CD4301AFA0800D91973;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				40067D26301B01AF00D91973 /* XCRemoteSwiftPackageReference "ATProtoKit" */,
+				40067D29301B01DD00D91973 /* XCRemoteSwiftPackageReference "ATIdentityTools" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 40067CDE301AFA0800D91973 /* Products */;
 			projectDirPath = "";
@@ -287,8 +303,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K59D6G2DZT;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -330,8 +348,10 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = K59D6G2DZT;
 				ENABLE_APP_SANDBOX = YES;
 				ENABLE_PREVIEWS = YES;
 				ENABLE_USER_SELECTED_FILES = readonly;
@@ -620,6 +640,43 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		40067D26301B01AF00D91973 /* XCRemoteSwiftPackageReference "ATProtoKit" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/MasterJ93/ATProtoKit.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.33.3;
+			};
+		};
+		40067D29301B01DD00D91973 /* XCRemoteSwiftPackageReference "ATIdentityTools" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/ATProtoKit/ATIdentityTools.git";
+			requirement = {
+				kind = upToNextMajorVersion;
+				minimumVersion = 0.1.4;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		40067D27301B01AF00D91973 /* ATProtoKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 40067D26301B01AF00D91973 /* XCRemoteSwiftPackageReference "ATProtoKit" */;
+			productName = ATProtoKit;
+		};
+		40067D2A301B01DD00D91973 /* ATIdentityTools */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 40067D29301B01DD00D91973 /* XCRemoteSwiftPackageReference "ATIdentityTools" */;
+			productName = ATIdentityTools;
+		};
+		40067D2C301B01DD00D91973 /* DIDCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 40067D29301B01DD00D91973 /* XCRemoteSwiftPackageReference "ATIdentityTools" */;
+			productName = DIDCore;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 40067CD5301AFA0800D91973 /* Project object */;
 }
