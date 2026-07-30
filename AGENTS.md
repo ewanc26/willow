@@ -60,6 +60,11 @@ Prefer the `xcode-tools` MCP commands over shell and `xcodebuild`; raw `ls`/`fin
 
 Add or update a test for changed non-UI logic. A green build is not evidence that a networked or auth flow works — those need verification against a real PDS with a disposable account.
 
+### Gotchas
+
+- **macOS App Sandbox blocks the network by default.** The target is sandboxed (`ENABLE_APP_SANDBOX = YES`). Without the outgoing-connections entitlement, every request silently fails and surfaces in-app as "the server isn't responding" — even though the PDS is fine. This is controlled by the `ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES` build setting (Signing & Capabilities → App Sandbox → **Outgoing Connections (Client)**), not by `Willow/Willow.entitlements`, which is currently **not wired into the build** (`CODE_SIGN_ENTITLEMENTS` is unset). To confirm what actually shipped, read the built app's entitlements: `codesign -d --entitlements - <App>`. A client app does not need Incoming Connections (Server).
+- **Reading Willow's logs.** Logging goes through `os.Logger` under subsystem `uk.ewancroft.Willow` (see `Services/Log.swift`), never logging passwords or tokens. Read with `log show --predicate 'subsystem == "uk.ewancroft.Willow"' --last 5m --info --debug` — `--info --debug` is required, as those levels aren't persisted by default.
+
 ## Commits
 
 - Atomic conventional commits, one logical change each, scoped by area (`feat(feed)`, `fix(auth)`, `docs(agents)`). Don't mix a code change with a docs update.
