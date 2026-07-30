@@ -22,6 +22,11 @@ struct PostRowView: View {
                         .font(.body)
                         .textSelection(.enabled)
                 }
+
+                if let embed = post.embed {
+                    EmbedView(embed: embed)
+                        .padding(.top, 2)
+                }
             }
         }
         .padding(.vertical, 4)

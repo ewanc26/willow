@@ -20,6 +20,9 @@ struct TimelinePost: Identifiable, Sendable, Hashable {
     let text: String
     let createdAt: Date
 
+    /// Embedded content (images, external card, quote), if any.
+    let embed: PostEmbed?
+
     /// The name to show, falling back to the handle when no display name is set.
     var displayName: String {
         if let authorDisplayName, !authorDisplayName.isEmpty { return authorDisplayName }
