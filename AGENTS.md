@@ -42,7 +42,7 @@ These matter the moment real feature work begins; hold to them from the first ne
 
 Reads/writes live under the `app.bsky.*` and `com.atproto.*` lexicons (`app.bsky.feed.getTimeline`, `app.bsky.feed.getPostThread`, `app.bsky.notification.listNotifications`, `com.atproto.repo.createRecord` for `app.bsky.feed.post`). When behaviour isn't fully pinned down by the lexicon spec, cross-check against reference implementations rather than guessing:
 
-- **`bluesky-social/atproto`** (TypeScript) — canonical; the tiebreaker when implementations disagree, since the real PDS/AppView are built against it.
+- **`bluesky-social/atproto`** (TypeScript) — canonical; the tiebreaker when implementations disagree, since the real PDS/AppView are built against it. Checked out locally at **`../atproto`**; its `lexicons/` directory (`app.bsky.*`, `com.atproto.*` JSON schemas) is the authoritative source for field names, required fields, and error codes — read the lexicon before choosing them, rather than guessing from generated names.
 - **`ATProtoKit`** (Swift) — the closest reference for a native Swift client: session handling, XRPC request shaping, and record types. Evaluate it as a dependency before hand-rolling XRPC.
 - **`../wolfram`** — Ewan's own C AT Protocol SDK powering the sibling console clients (`../channel-blue`, `../cobalt`). Not directly usable from Swift, but a consistent reference for how these problems were solved across the wider toolset.
 
