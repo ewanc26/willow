@@ -68,5 +68,5 @@ Add or update a test for changed non-UI logic. A green build is not evidence tha
 ## Commits
 
 - Atomic conventional commits, one logical change each, scoped by area (`feat(feed)`, `fix(auth)`, `docs(agents)`). Don't mix a code change with a docs update.
-- **No AI co-author trailer.** AI assistance is welcome; committed credit goes to human authors. Omit `Co-authored-by:` for AI agents entirely, matching the convention across Ewan's other repositories.
+- **Honest attribution.** AI assistance is welcome; include a `Co-authored-by:` trailer for an AI agent when it materially contributed, matching the convention across Ewan's other repositories.
 - Don't stage build products (`build/`, DerivedData, `.app`/`.xctest` under `Products/`), secrets, or unrelated worktree changes.
