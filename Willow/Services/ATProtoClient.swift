@@ -13,13 +13,15 @@ import Foundation
 import os
 import ATProtoKit
 
-final class ATProtoClient: AuthService, TimelineService {
+final class ATProtoClient: AuthService, TimelineService, InteractionService {
 
     private let persistence: SessionPersistence
 
-    /// Live session state. Both are `nil` until signed in or restored.
+    /// Live session state. All are `nil` until signed in or restored.
     private var configuration: ATProtocolConfiguration?
     private var atProtoKit: ATProtoKit?
+    /// The write-path helper (like/repost/createRecord), built from `atProtoKit`.
+    private var bluesky: ATProtoBluesky?
 
     init(persistence: SessionPersistence = SessionPersistence()) {
         self.persistence = persistence
@@ -55,8 +57,10 @@ final class ATProtoClient: AuthService, TimelineService {
 
         Log.auth.notice("Session restored for \(stored.account.handle, privacy: .public)")
 
+        let atProtoKit = await ATProtoKit(sessionConfiguration: configuration)
         self.configuration = configuration
-        self.atProtoKit = await ATProtoKit(sessionConfiguration: configuration)
+        self.atProtoKit = atProtoKit
+        self.bluesky = ATProtoBluesky(atProtoKitInstance: atProtoKit)
         return stored.account
     }
 
@@ -93,6 +97,7 @@ final class ATProtoClient: AuthService, TimelineService {
         let account = Account(did: session.sessionDID, handle: session.handle)
         self.configuration = configuration
         self.atProtoKit = atProtoKit
+        self.bluesky = ATProtoBluesky(atProtoKitInstance: atProtoKit)
         persistence.save(keychainID: keychainID, pdsURL: pdsURL, account: account)
         Log.auth.notice("Signed in as \(account.handle, privacy: .public) (\(account.did, privacy: .public))")
         return account
@@ -103,6 +108,37 @@ final class ATProtoClient: AuthService, TimelineService {
         persistence.clear()
         configuration = nil
         atProtoKit = nil
+        bluesky = nil
+    }
+
+    // MARK: - InteractionService
+
+    func like(uri: String, cid: String) async throws -> String {
+        guard let bluesky else { throw AuthError.notSignedIn }
+        let subject = ComAtprotoLexicon.Repository.StrongReference(recordURI: uri, cidHash: cid)
+        let record = try await bluesky.createLikeRecord(subject)
+        Log.timeline.info("Liked \(uri, privacy: .public)")
+        return record.recordURI
+    }
+
+    func unlike(likeURI: String) async throws {
+        guard let bluesky else { throw AuthError.notSignedIn }
+        try await bluesky.deleteRecord(.recordURI(atURI: likeURI))
+        Log.timeline.info("Unliked \(likeURI, privacy: .public)")
+    }
+
+    func repost(uri: String, cid: String) async throws -> String {
+        guard let bluesky else { throw AuthError.notSignedIn }
+        let subject = ComAtprotoLexicon.Repository.StrongReference(recordURI: uri, cidHash: cid)
+        let record = try await bluesky.createRepostRecord(subject)
+        Log.timeline.info("Reposted \(uri, privacy: .public)")
+        return record.recordURI
+    }
+
+    func removeRepost(repostURI: String) async throws {
+        guard let bluesky else { throw AuthError.notSignedIn }
+        try await bluesky.deleteRecord(.recordURI(atURI: repostURI))
+        Log.timeline.info("Removed repost \(repostURI, privacy: .public)")
     }
 
     // MARK: - TimelineService
