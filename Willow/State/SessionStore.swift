@@ -68,6 +68,27 @@ final class SessionStore {
         }
     }
 
+    func signInWithOAuth(pdsURL: URL) async {
+        isSigningIn = true
+        signInError = nil
+        defer { isSigningIn = false }
+
+        do {
+            let account = try await client.signInWithOAuth(pdsURL: pdsURL)
+            phase = .signedIn(account)
+        } catch OAuthError.userCancelled {
+            // User dismissed the sign-in browser; not an error worth showing.
+        } catch {
+            signInError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    /// Clears a stale sign-in error, e.g. when the user switches between the
+    /// OAuth and app-password forms.
+    func clearSignInError() {
+        signInError = nil
+    }
+
     func signOut() async {
         await client.signOut()
         signInError = nil

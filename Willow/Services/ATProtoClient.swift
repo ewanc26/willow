@@ -23,6 +23,12 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
     /// The write-path helper (like/repost/createRecord), built from `atProtoKit`.
     private var bluesky: ATProtoBluesky?
 
+    /// Set once an OAuth sign-in completes. `atProtoKit`/`bluesky` stay `nil`
+    /// in that case — see `signInWithOAuth` — so any `TimelineService`/
+    /// `InteractionService` call correctly throws `.notSignedIn` rather than
+    /// silently using stale or absent credentials.
+    private var oauthTokens: OAuthTokens?
+
     init(persistence: SessionPersistence = SessionPersistence()) {
         self.persistence = persistence
     }
@@ -33,6 +39,10 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
         guard let stored = persistence.stored else {
             Log.auth.debug("No persisted session to restore.")
             return nil
+        }
+
+        if stored.isOAuth {
+            return try restoreOAuthSession(stored)
         }
 
         Log.auth.info("Restoring session for \(stored.account.handle, privacy: .public) at \(stored.pdsURL.absoluteString, privacy: .public)")
@@ -103,12 +113,100 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
         return account
     }
 
+    /// Restores an OAuth session's DID/handle from its persisted token store.
+    ///
+    /// This does not refresh or validate the access token against the
+    /// authorization server (there's no request pipeline to use it with yet —
+    /// see the type doc on `AuthService`), so a restored OAuth account may be
+    /// signed in only in the sense that Willow remembers who it is.
+    private func restoreOAuthSession(_ stored: SessionPersistence.Stored) throws -> Account? {
+        let store = OAuthTokenStore(identifier: stored.keychainID)
+        guard let tokens = try store.load() else {
+            Log.auth.debug("OAuth session pointer existed but its tokens are gone; clearing.")
+            persistence.clear()
+            return nil
+        }
+        self.oauthTokens = OAuthTokens(
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            expiresIn: 0,
+            subjectDID: tokens.subjectDID,
+            pdsURL: tokens.pdsURL,
+            authServer: OAuthServerMetadata(
+                issuer: tokens.authServerIssuer,
+                authorizationEndpoint: tokens.authorizationEndpoint,
+                tokenEndpoint: tokens.tokenEndpoint,
+                pushedAuthorizationRequestEndpoint: tokens.pushedAuthorizationRequestEndpoint
+            ),
+            dpopKeyIdentifier: stored.keychainID,
+            authServerNonce: nil
+        )
+        Log.auth.notice("Restored OAuth session for \(stored.account.handle, privacy: .public)")
+        return stored.account
+    }
+
+    /// Runs the AT Protocol OAuth flow and persists the resulting tokens.
+    ///
+    /// The returned `Account` is genuine — its DID comes straight from the
+    /// token response's `sub` claim — but see the `AuthService` doc comment:
+    /// nothing built on top of `atProtoKit`/`bluesky` works for it yet.
+    func signInWithOAuth(pdsURL: URL) async throws -> Account {
+        Log.auth.info("Starting OAuth sign-in at \(pdsURL.absoluteString, privacy: .public)")
+
+        let client = OAuthClient()
+        let tokens = try await client.signIn(pdsURL: pdsURL)
+        self.oauthTokens = tokens
+
+        let handle = await Self.resolveHandle(did: tokens.subjectDID, pdsURL: pdsURL)
+        let account = Account(did: tokens.subjectDID, handle: handle ?? tokens.subjectDID)
+
+        let store = OAuthTokenStore(identifier: tokens.dpopKeyIdentifier)
+        try store.save(OAuthTokenStore.StoredTokens(
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            subjectDID: tokens.subjectDID,
+            pdsURL: tokens.pdsURL,
+            authServerIssuer: tokens.authServer.issuer,
+            authorizationEndpoint: tokens.authServer.authorizationEndpoint,
+            tokenEndpoint: tokens.authServer.tokenEndpoint,
+            pushedAuthorizationRequestEndpoint: tokens.authServer.pushedAuthorizationRequestEndpoint
+        ))
+        persistence.save(keychainID: tokens.dpopKeyIdentifier, pdsURL: pdsURL, account: account, isOAuth: true)
+
+        Log.auth.notice("OAuth sign-in complete for \(account.did, privacy: .public)")
+        return account
+    }
+
+    /// Best-effort handle lookup for the OAuth account-creation display name —
+    /// `com.atproto.repo.describeRepo` is an unauthenticated, public read, so
+    /// this needs no DPoP proof. A failure here just leaves the handle showing
+    /// as the DID; it's cosmetic, not a sign-in failure.
+    private static func resolveHandle(did: String, pdsURL: URL) async -> String? {
+        var components = URLComponents(url: pdsURL.appending(path: "xrpc/com.atproto.repo.describeRepo"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "repo", value: did)]
+        guard let url = components?.url else { return nil }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            return json["handle"] as? String
+        } catch {
+            return nil
+        }
+    }
+
     func signOut() async {
         Log.auth.info("Signing out.")
+        if let stored = persistence.stored, stored.isOAuth {
+            OAuthTokenStore(identifier: stored.keychainID).delete()
+            DPoPKeyStore(identifier: stored.keychainID).delete()
+        }
         persistence.clear()
         configuration = nil
         atProtoKit = nil
         bluesky = nil
+        oauthTokens = nil
     }
 
     // MARK: - InteractionService

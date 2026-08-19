@@ -19,6 +19,7 @@ struct SessionPersistence: Sendable {
         static let pdsURL = "willow.session.pdsURL"
         static let did = "willow.session.did"
         static let handle = "willow.session.handle"
+        static let isOAuth = "willow.session.isOAuth"
     }
 
     /// Everything needed to reopen a persisted session.
@@ -26,6 +27,9 @@ struct SessionPersistence: Sendable {
         let keychainID: UUID
         let pdsURL: URL
         let account: Account
+        /// `true` when `keychainID` names an `OAuthTokenStore`/`DPoPKeyStore`
+        /// pair rather than an `AppleSecureKeychain` app-password session.
+        let isOAuth: Bool
     }
 
     private let defaults: UserDefaults
@@ -47,19 +51,21 @@ struct SessionPersistence: Sendable {
         return Stored(
             keychainID: keychainID,
             pdsURL: pdsURL,
-            account: Account(did: did, handle: handle)
+            account: Account(did: did, handle: handle),
+            isOAuth: defaults.bool(forKey: Key.isOAuth)
         )
     }
 
-    func save(keychainID: UUID, pdsURL: URL, account: Account) {
+    func save(keychainID: UUID, pdsURL: URL, account: Account, isOAuth: Bool = false) {
         defaults.set(keychainID.uuidString, forKey: Key.keychainID)
         defaults.set(pdsURL.absoluteString, forKey: Key.pdsURL)
         defaults.set(account.did, forKey: Key.did)
         defaults.set(account.handle, forKey: Key.handle)
+        defaults.set(isOAuth, forKey: Key.isOAuth)
     }
 
     func clear() {
-        [Key.keychainID, Key.pdsURL, Key.did, Key.handle]
+        [Key.keychainID, Key.pdsURL, Key.did, Key.handle, Key.isOAuth]
             .forEach(defaults.removeObject(forKey:))
     }
 }

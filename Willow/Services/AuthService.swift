@@ -7,10 +7,20 @@ import Foundation
 
 /// Abstraction over how Willow signs in and restores sessions.
 ///
-/// Willow currently authenticates with an **app password** — the only method
-/// ATProtoKit's stable API supports today. This protocol exists so a future
-/// OAuth backend can replace the implementation without touching the UI or
-/// session-management layers. See AGENTS.md for the auth roadmap.
+/// Willow supports two sign-in paths: an **app password** (ATProtoKit's
+/// stable, fully-wired API) and **OAuth** (the AT Protocol's recommended
+/// flow, implemented by hand in `Services/OAuth/` since ATProtoKit doesn't
+/// ship an OAuth client). This protocol exists so either backend can be
+/// selected without touching the UI or session-management layers.
+///
+/// - Important: An OAuth-signed-in `Account` is real — the DID, handle, and
+///   DPoP-bound tokens all come from a completed authorization-code exchange
+///   — but `TimelineService`/`InteractionService` calls will currently fail
+///   for it. Those go through ATProtoKit's `SessionConfiguration`, which
+///   signs requests with a plain Bearer header; OAuth's DPoP-bound tokens
+///   need every request proof-signed, which ATProtoKit doesn't yet support.
+///   See `Services/OAuth/OAuthClient.swift` for the full explanation and
+///   `ATProtoClient.signInWithOAuth` for where that gap surfaces.
 protocol AuthService: AnyObject, Sendable {
 
     /// Attempts to restore a previously persisted session.
@@ -22,6 +32,11 @@ protocol AuthService: AnyObject, Sendable {
     /// Signs in with an identifier (handle or DID) and an app password against
     /// the given PDS.
     func signIn(identifier: String, appPassword: String, pdsURL: URL) async throws -> Account
+
+    /// Signs in via the AT Protocol OAuth flow: PAR, browser-based user
+    /// consent, and a DPoP-signed code exchange. See the type-level note above
+    /// for what this does and doesn't wire up yet.
+    func signInWithOAuth(pdsURL: URL) async throws -> Account
 
     /// Clears the local session. Best-effort; never throws.
     func signOut() async
