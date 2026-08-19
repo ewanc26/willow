@@ -14,7 +14,7 @@ import os
 import ATProtoKit
 import CryptoKit
 
-final class ATProtoClient: AuthService, TimelineService, InteractionService, NotificationService, ComposeService {
+final class ATProtoClient: AuthService, TimelineService, InteractionService, NotificationService, ComposeService, ThreadService, ProfileService {
 
     private let persistence: SessionPersistence
 
@@ -387,6 +387,53 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService, Not
         }
     }
 
+    // MARK: - ThreadService
+
+    // OAuth sessions don't route through here yet — same known gap as
+    // NotificationService above; `.notSignedIn` is correct rather than
+    // silently doing nothing.
+
+    func thread(forPostURI uri: String) async throws -> ThreadPage {
+        guard let atProtoKit else { throw AuthError.notSignedIn }
+
+        let output = try await atProtoKit.getPostThread(from: uri)
+        guard case .threadViewPost(let threadView) = output.thread else {
+            throw AuthError.failed(underlying: "That post is unavailable (deleted, blocked, or not found).")
+        }
+
+        var parent: TimelinePost?
+        if case .threadViewPost(let parentView) = threadView.parent {
+            parent = Self.makePost(from: parentView.post)
+        }
+
+        let replies: [TimelinePost] = (threadView.replies ?? []).compactMap { reply in
+            guard case .threadViewPost(let replyView) = reply else { return nil }
+            return Self.makePost(from: replyView.post)
+        }
+
+        return ThreadPage(parent: parent, post: Self.makePost(from: threadView.post), replies: replies)
+    }
+
+    // MARK: - ProfileService
+
+    // Same OAuth gap as ThreadService above.
+
+    func profile(forActor actor: String) async throws -> Profile {
+        guard let atProtoKit else { throw AuthError.notSignedIn }
+
+        let output = try await atProtoKit.getProfile(for: actor)
+        return Profile(
+            did: output.actorDID,
+            handle: output.actorHandle,
+            displayName: output.displayName,
+            avatarURL: output.avatarImageURL,
+            bio: output.description,
+            followerCount: output.followerCount ?? 0,
+            followingCount: output.followCount ?? 0,
+            postCount: output.postCount ?? 0
+        )
+    }
+
     // MARK: - NotificationService
 
     // OAuth sessions don't route through here yet — same known gap as the
@@ -472,7 +519,13 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService, Not
     /// record arrives as an `UnknownType`; we ask it for the concrete
     /// `PostRecord` to read the text and authored timestamp.
     private nonisolated static func makePost(from item: AppBskyLexicon.Feed.FeedViewPostDefinition) -> TimelinePost {
-        let post = item.post
+        makePost(from: item.post)
+    }
+
+    /// The shared mapping from a raw `PostViewDefinition` — used both by the
+    /// timeline (unwrapped from a `FeedViewPostDefinition` above) and by the
+    /// thread view, where posts arrive without that feed-item wrapper.
+    private nonisolated static func makePost(from post: AppBskyLexicon.Feed.PostViewDefinition) -> TimelinePost {
         let record = post.record.getRecord(ofType: AppBskyLexicon.Feed.PostRecord.self)
 
         return TimelinePost(

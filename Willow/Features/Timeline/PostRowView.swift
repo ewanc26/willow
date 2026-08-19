@@ -15,24 +15,39 @@ struct PostRowView: View {
     /// in `TimelineView`, since this view only holds a value-type snapshot).
     var onToggleLike: () -> Void = {}
     var onToggleRepost: () -> Void = {}
+    /// Opens this post's thread. Absent (default) disables the row tap, e.g.
+    /// when a row is already shown inside `ThreadView` itself.
+    var onTapPost: () -> Void = {}
+    /// Opens the author's profile.
+    var onTapAuthor: () -> Void = {}
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
             avatar
+                .onTapGesture(perform: onTapAuthor)
 
             VStack(alignment: .leading, spacing: 4) {
-                authorLine
+                // Tappable to open the thread: everything except the
+                // interaction bar below, so its own like/repost buttons keep
+                // first claim on taps rather than a parent gesture stealing them.
+                VStack(alignment: .leading, spacing: 4) {
+                    authorLine
+                        .contentShape(Rectangle())
+                        .onTapGesture(perform: onTapAuthor)
 
-                if !post.text.isEmpty {
-                    Text(post.text)
-                        .font(.body)
-                        .textSelection(.enabled)
-                }
+                    if !post.text.isEmpty {
+                        Text(post.text)
+                            .font(.body)
+                            .textSelection(.enabled)
+                    }
 
-                if let embed = post.embed {
-                    EmbedView(embed: embed)
-                        .padding(.top, 2)
+                    if let embed = post.embed {
+                        EmbedView(embed: embed)
+                            .padding(.top, 2)
+                    }
                 }
+                .contentShape(Rectangle())
+                .onTapGesture(perform: onTapPost)
 
                 interactionBar
                     .padding(.top, 2)
