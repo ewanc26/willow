@@ -14,7 +14,7 @@ import os
 import ATProtoKit
 import CryptoKit
 
-final class ATProtoClient: AuthService, TimelineService, InteractionService, NotificationService {
+final class ATProtoClient: AuthService, TimelineService, InteractionService, NotificationService, ComposeService {
 
     private let persistence: SessionPersistence
 
@@ -305,6 +305,23 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService, Not
             method: "POST", path: "com.atproto.repo.deleteRecord", body: body, tokens: tokens, dpopKey: dpopKey
         )
         return updated
+    }
+
+    // MARK: - ComposeService
+
+    // OAuth sessions don't route through here yet, same as notifications:
+    // `ATFacetParser` (link/mention/hashtag detection with UTF-8 byte
+    // offsets, per AGENTS.md) is ATProtoKit-internal, so an OAuth compose
+    // path would mean hand-rolling facet detection rather than reusing it.
+    // `.notSignedIn` is correct until that's worth doing, rather than
+    // posting with no facets and silently degrading link/mention rendering.
+
+    func createPost(text: String) async throws -> String {
+        guard oauthTokens == nil else { throw AuthError.notSignedIn }
+        guard let bluesky else { throw AuthError.notSignedIn }
+        let reference = try await bluesky.createPostRecord(text: text)
+        Log.timeline.info("Created post \(reference.recordURI, privacy: .public)")
+        return reference.recordURI
     }
 
     // MARK: - TimelineService

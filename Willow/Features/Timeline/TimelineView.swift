@@ -18,6 +18,7 @@ struct TimelineView: View {
     @State private var isLoading = false
     @State private var loadError: String?
     @State private var hasLoadedOnce = false
+    @State private var isComposePresented = false
 
     var body: some View {
         NavigationStack {
@@ -34,12 +35,23 @@ struct TimelineView: View {
                             Image(systemName: "person.crop.circle")
                         }
                     }
+                    ToolbarItem(placement: .primaryAction) {
+                        Button {
+                            isComposePresented = true
+                        } label: {
+                            Image(systemName: "square.and.pencil")
+                        }
+                        .accessibilityLabel("New Post")
+                    }
                 }
         }
         .task {
             guard !hasLoadedOnce else { return }
             hasLoadedOnce = true
             await refresh()
+        }
+        .sheet(isPresented: $isComposePresented) {
+            ComposeView(onPosted: { Task { await refresh() } })
         }
     }
 
