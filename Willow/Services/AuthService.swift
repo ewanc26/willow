@@ -13,14 +13,12 @@ import Foundation
 /// ship an OAuth client). This protocol exists so either backend can be
 /// selected without touching the UI or session-management layers.
 ///
-/// - Important: An OAuth-signed-in `Account` is real — the DID, handle, and
-///   DPoP-bound tokens all come from a completed authorization-code exchange
-///   — but `TimelineService`/`InteractionService` calls will currently fail
-///   for it. Those go through ATProtoKit's `SessionConfiguration`, which
-///   signs requests with a plain Bearer header; OAuth's DPoP-bound tokens
-///   need every request proof-signed, which ATProtoKit doesn't yet support.
-///   See `Services/OAuth/OAuthClient.swift` for the full explanation and
-///   `ATProtoClient.signInWithOAuth` for where that gap surfaces.
+/// - Note: An OAuth-signed-in `Account`'s `TimelineService`/`InteractionService`
+///   calls route through `Services/OAuth/OAuthXRPCClient.swift` rather than
+///   ATProtoKit — ATProtoKit's `SessionConfiguration` only signs requests
+///   with a plain Bearer header, but OAuth's tokens are DPoP-bound and need
+///   every request proof-signed. `OAuthXRPCClient` does that, plus the
+///   `DPoP-Nonce` retry and access-token refresh both endpoints need.
 protocol AuthService: AnyObject, Sendable {
 
     /// Attempts to restore a previously persisted session.

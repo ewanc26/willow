@@ -28,6 +28,10 @@ struct OAuthTokens: Sendable {
     /// signing token-endpoint requests (e.g. on refresh) without an extra
     /// round trip to learn it again.
     let authServerNonce: String?
+    /// The resource server's (PDS) most recent DPoP nonce — a separate nonce
+    /// space from `authServerNonce`, learned the first time a resource
+    /// request is made. See `OAuthXRPCClient`.
+    var resourceServerNonce: String? = nil
 }
 
 enum OAuthError: LocalizedError {
@@ -52,11 +56,12 @@ enum OAuthError: LocalizedError {
 /// browser-based consent, and the code-for-tokens exchange — all DPoP-signed
 /// per https://atproto.com/specs/oauth.
 ///
-/// This produces valid, DPoP-bound `OAuthTokens`. Wiring those into Willow's
-/// existing `TimelineService`/`InteractionService` calls is a separate step:
-/// ATProtoKit's `SessionConfiguration` extension speaks plain Bearer auth, not
-/// DPoP, so those calls need their own DPoP-aware transport before an
-/// OAuth-signed-in account can actually fetch a timeline. See AuthService.swift.
+/// This produces valid, DPoP-bound `OAuthTokens`. Willow's
+/// `TimelineService`/`InteractionService` calls don't go through ATProtoKit
+/// for an OAuth-signed-in account — its `SessionConfiguration` only speaks
+/// plain Bearer auth — but through `OAuthXRPCClient`, a small DPoP-aware XRPC
+/// transport built for exactly this. See `ATProtoClient`'s OAuth branch of
+/// each protocol method.
 @MainActor
 final class OAuthClient: NSObject {
 

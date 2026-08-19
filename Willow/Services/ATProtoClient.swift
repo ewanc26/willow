@@ -12,6 +12,7 @@
 import Foundation
 import os
 import ATProtoKit
+import CryptoKit
 
 final class ATProtoClient: AuthService, TimelineService, InteractionService {
 
@@ -212,6 +213,26 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
     // MARK: - InteractionService
 
     func like(uri: String, cid: String) async throws -> String {
+        if oauthTokens != nil {
+            return try await withOAuthTokens { tokens, dpopKey in
+                let record: [String: Any] = [
+                    "$type": "app.bsky.feed.like",
+                    "subject": ["uri": uri, "cid": cid],
+                    "createdAt": ISO8601DateFormatter().string(from: Date())
+                ]
+                let body: [String: Any] = [
+                    "repo": tokens.subjectDID,
+                    "collection": "app.bsky.feed.like",
+                    "record": record
+                ]
+                let (json, updated) = try await OAuthXRPCClient.request(
+                    method: "POST", path: "com.atproto.repo.createRecord", body: body, tokens: tokens, dpopKey: dpopKey
+                )
+                guard let recordURI = json["uri"] as? String else { throw OAuthXRPCClient.XRPCError.invalidResponse }
+                Log.timeline.info("Liked \(uri, privacy: .public) via OAuth")
+                return (recordURI, updated)
+            }
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         let subject = ComAtprotoLexicon.Repository.StrongReference(recordURI: uri, cidHash: cid)
         let record = try await bluesky.createLikeRecord(subject)
@@ -220,12 +241,40 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
     }
 
     func unlike(likeURI: String) async throws {
+        if oauthTokens != nil {
+            try await withOAuthTokens { tokens, dpopKey -> (Void, OAuthTokens) in
+                let updated = try await Self.deleteRecord(likeURI, tokens: tokens, dpopKey: dpopKey)
+                Log.timeline.info("Unliked \(likeURI, privacy: .public) via OAuth")
+                return ((), updated)
+            }
+            return
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         try await bluesky.deleteRecord(.recordURI(atURI: likeURI))
         Log.timeline.info("Unliked \(likeURI, privacy: .public)")
     }
 
     func repost(uri: String, cid: String) async throws -> String {
+        if oauthTokens != nil {
+            return try await withOAuthTokens { tokens, dpopKey in
+                let record: [String: Any] = [
+                    "$type": "app.bsky.feed.repost",
+                    "subject": ["uri": uri, "cid": cid],
+                    "createdAt": ISO8601DateFormatter().string(from: Date())
+                ]
+                let body: [String: Any] = [
+                    "repo": tokens.subjectDID,
+                    "collection": "app.bsky.feed.repost",
+                    "record": record
+                ]
+                let (json, updated) = try await OAuthXRPCClient.request(
+                    method: "POST", path: "com.atproto.repo.createRecord", body: body, tokens: tokens, dpopKey: dpopKey
+                )
+                guard let recordURI = json["uri"] as? String else { throw OAuthXRPCClient.XRPCError.invalidResponse }
+                Log.timeline.info("Reposted \(uri, privacy: .public) via OAuth")
+                return (recordURI, updated)
+            }
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         let subject = ComAtprotoLexicon.Repository.StrongReference(recordURI: uri, cidHash: cid)
         let record = try await bluesky.createRepostRecord(subject)
@@ -234,14 +283,47 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
     }
 
     func removeRepost(repostURI: String) async throws {
+        if oauthTokens != nil {
+            try await withOAuthTokens { tokens, dpopKey -> (Void, OAuthTokens) in
+                let updated = try await Self.deleteRecord(repostURI, tokens: tokens, dpopKey: dpopKey)
+                Log.timeline.info("Removed repost \(repostURI, privacy: .public) via OAuth")
+                return ((), updated)
+            }
+            return
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         try await bluesky.deleteRecord(.recordURI(atURI: repostURI))
         Log.timeline.info("Removed repost \(repostURI, privacy: .public)")
     }
 
+    private static func deleteRecord(_ recordURI: String, tokens: OAuthTokens, dpopKey: P256.Signing.PrivateKey) async throws -> OAuthTokens {
+        guard let parsed = OAuthXRPCClient.parseRecordURI(recordURI) else {
+            throw OAuthXRPCClient.XRPCError.invalidResponse
+        }
+        let body: [String: Any] = ["repo": parsed.repo, "collection": parsed.collection, "rkey": parsed.rkey]
+        let (_, updated) = try await OAuthXRPCClient.request(
+            method: "POST", path: "com.atproto.repo.deleteRecord", body: body, tokens: tokens, dpopKey: dpopKey
+        )
+        return updated
+    }
+
     // MARK: - TimelineService
 
     func homeTimeline(cursor: String?) async throws -> TimelinePage {
+        if oauthTokens != nil {
+            return try await withOAuthTokens { tokens, dpopKey in
+                var query: [String: String] = [:]
+                if let cursor { query["cursor"] = cursor }
+                let (json, updated) = try await OAuthXRPCClient.request(
+                    method: "GET", path: "app.bsky.feed.getTimeline", query: query, tokens: tokens, dpopKey: dpopKey
+                )
+                let feed = json["feed"] as? [[String: Any]] ?? []
+                let posts = feed.compactMap { ($0["post"] as? [String: Any]).flatMap(OAuthPostMapping.makePost) }
+                let page = TimelinePage(posts: posts, cursor: json["cursor"] as? String)
+                Log.timeline.info("Loaded \(posts.count) posts via OAuth (paging: \(cursor != nil, privacy: .public))")
+                return (page, updated)
+            }
+        }
         guard let atProtoKit else { throw AuthError.notSignedIn }
 
         do {
@@ -253,6 +335,34 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
             Log.timeline.error("Timeline fetch failed: \(error.localizedDescription, privacy: .public)")
             throw error
         }
+    }
+
+    // MARK: - OAuth request plumbing
+
+    /// Runs `body` against the current OAuth session's tokens and DPoP key,
+    /// then persists any nonce learned or token refreshed along the way —
+    /// centralized here so every OAuth-backed protocol method above gets that
+    /// bookkeeping for free instead of repeating it.
+    private func withOAuthTokens<T>(
+        _ body: (OAuthTokens, P256.Signing.PrivateKey) async throws -> (T, OAuthTokens)
+    ) async throws -> T {
+        guard let tokens = oauthTokens else { throw AuthError.notSignedIn }
+        let dpopKey = try DPoPKeyStore(identifier: tokens.dpopKeyIdentifier).key()
+        let (result, updated) = try await body(tokens, dpopKey)
+        oauthTokens = updated
+        if updated.accessToken != tokens.accessToken || updated.refreshToken != tokens.refreshToken {
+            try? OAuthTokenStore(identifier: updated.dpopKeyIdentifier).save(OAuthTokenStore.StoredTokens(
+                accessToken: updated.accessToken,
+                refreshToken: updated.refreshToken,
+                subjectDID: updated.subjectDID,
+                pdsURL: updated.pdsURL,
+                authServerIssuer: updated.authServer.issuer,
+                authorizationEndpoint: updated.authServer.authorizationEndpoint,
+                tokenEndpoint: updated.authServer.tokenEndpoint,
+                pushedAuthorizationRequestEndpoint: updated.authServer.pushedAuthorizationRequestEndpoint
+            ))
+        }
+        return result
     }
 
     // MARK: - Mapping
