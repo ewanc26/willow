@@ -309,19 +309,52 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService, Not
 
     // MARK: - ComposeService
 
-    // OAuth sessions don't route through here yet, same as notifications:
-    // `ATFacetParser` (link/mention/hashtag detection with UTF-8 byte
-    // offsets, per AGENTS.md) is ATProtoKit-internal, so an OAuth compose
-    // path would mean hand-rolling facet detection rather than reusing it.
-    // `.notSignedIn` is correct until that's worth doing, rather than
-    // posting with no facets and silently degrading link/mention rendering.
-
     func createPost(text: String) async throws -> String {
-        guard oauthTokens == nil else { throw AuthError.notSignedIn }
+        if oauthTokens != nil {
+            return try await withOAuthTokens { tokens, dpopKey in
+                let facets = await OAuthFacetDetector.buildFacetsJSON(for: text) { handle in
+                    try? await Self.resolveDID(forHandle: handle, tokens: tokens, dpopKey: dpopKey)
+                }
+                var record: [String: Any] = [
+                    "$type": "app.bsky.feed.post",
+                    "text": text,
+                    "createdAt": ISO8601DateFormatter().string(from: Date())
+                ]
+                if !facets.isEmpty { record["facets"] = facets }
+                let body: [String: Any] = [
+                    "repo": tokens.subjectDID,
+                    "collection": "app.bsky.feed.post",
+                    "record": record
+                ]
+                let (json, updated) = try await OAuthXRPCClient.request(
+                    method: "POST", path: "com.atproto.repo.createRecord", body: body, tokens: tokens, dpopKey: dpopKey
+                )
+                guard let recordURI = json["uri"] as? String else { throw OAuthXRPCClient.XRPCError.invalidResponse }
+                Log.timeline.info("Created post \(recordURI, privacy: .public) via OAuth")
+                return (recordURI, updated)
+            }
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         let reference = try await bluesky.createPostRecord(text: text)
         Log.timeline.info("Created post \(reference.recordURI, privacy: .public)")
         return reference.recordURI
+    }
+
+    /// Resolves `@handle.tld` to a DID for a mention facet, via the same
+    /// XRPC transport as everything else on the OAuth path.
+    private static func resolveDID(
+        forHandle handle: String,
+        tokens: OAuthTokens,
+        dpopKey: P256.Signing.PrivateKey
+    ) async throws -> String? {
+        let (json, _) = try await OAuthXRPCClient.request(
+            method: "GET",
+            path: "com.atproto.identity.resolveHandle",
+            query: ["handle": handle],
+            tokens: tokens,
+            dpopKey: dpopKey
+        )
+        return json["did"] as? String
     }
 
     // MARK: - TimelineService
