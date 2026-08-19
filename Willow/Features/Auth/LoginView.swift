@@ -31,6 +31,8 @@ struct LoginView: View {
 
     var body: some View {
         VStack(spacing: 24) {
+            Spacer()
+
             VStack(spacing: 8) {
                 Image(systemName: "leaf.fill")
                     .font(.system(size: 44))
