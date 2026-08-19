@@ -10,12 +10,9 @@ import Foundation
 /// `clientID` must resolve to an HTTPS URL that serves the exact JSON
 /// `metadataDocument` describes, with `Content-Type: application/json` — the
 /// authorization server fetches it during PAR to learn the redirect URIs,
-/// scopes, and DPoP requirement it should honor. **Willow has no web backend
-/// yet, so nothing is hosted there today**; this is the known gap referenced
-/// in the OAuth PR description. Until `https://willow.ewancroft.uk/oauth/client-metadata.json`
-/// (or wherever this ends up living) actually serves this document, PAR
-/// requests will fail at the authorization server with an unresolvable
-/// `client_id`. Swap `clientID`/`redirectURI` for the real values once hosted.
+/// scopes, and DPoP requirement it should honor. Served by a small Cloudflare
+/// Worker (`willow-oauth`, routed at `willow.ewancroft.uk`) that returns this
+/// same document verbatim — keep the two in sync if either changes.
 enum OAuthClientMetadata {
 
     static let clientID = URL(string: "https://willow.ewancroft.uk/oauth/client-metadata.json")!
