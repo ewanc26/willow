@@ -7,10 +7,18 @@ import Foundation
 
 /// Abstraction over how Willow signs in and restores sessions.
 ///
-/// Willow currently authenticates with an **app password** — the only method
-/// ATProtoKit's stable API supports today. This protocol exists so a future
-/// OAuth backend can replace the implementation without touching the UI or
-/// session-management layers. See AGENTS.md for the auth roadmap.
+/// Willow supports two sign-in paths: an **app password** (ATProtoKit's
+/// stable, fully-wired API) and **OAuth** (the AT Protocol's recommended
+/// flow, implemented by hand in `Services/OAuth/` since ATProtoKit doesn't
+/// ship an OAuth client). This protocol exists so either backend can be
+/// selected without touching the UI or session-management layers.
+///
+/// - Note: An OAuth-signed-in `Account`'s `TimelineService`/`InteractionService`
+///   calls route through `Services/OAuth/OAuthXRPCClient.swift` rather than
+///   ATProtoKit — ATProtoKit's `SessionConfiguration` only signs requests
+///   with a plain Bearer header, but OAuth's tokens are DPoP-bound and need
+///   every request proof-signed. `OAuthXRPCClient` does that, plus the
+///   `DPoP-Nonce` retry and access-token refresh both endpoints need.
 protocol AuthService: AnyObject, Sendable {
 
     /// Attempts to restore a previously persisted session.
@@ -22,6 +30,11 @@ protocol AuthService: AnyObject, Sendable {
     /// Signs in with an identifier (handle or DID) and an app password against
     /// the given PDS.
     func signIn(identifier: String, appPassword: String, pdsURL: URL) async throws -> Account
+
+    /// Signs in via the AT Protocol OAuth flow: PAR, browser-based user
+    /// consent, and a DPoP-signed code exchange. See the type-level note above
+    /// for what this does and doesn't wire up yet.
+    func signInWithOAuth(pdsURL: URL) async throws -> Account
 
     /// Clears the local session. Best-effort; never throws.
     func signOut() async

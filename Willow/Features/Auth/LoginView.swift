@@ -14,6 +14,7 @@ struct LoginView: View {
     @State private var identifier = ""
     @State private var appPassword = ""
     @State private var pdsURLString = "https://bsky.social"
+    @State private var showAppPasswordForm = false
 
     private var pdsURL: URL? {
         let trimmed = pdsURLString.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -30,6 +31,8 @@ struct LoginView: View {
 
     var body: some View {
         VStack(spacing: 24) {
+            Spacer()
+
             VStack(spacing: 8) {
                 Image(systemName: "leaf.fill")
                     .font(.system(size: 44))
@@ -40,6 +43,69 @@ struct LoginView: View {
                     .foregroundStyle(.secondary)
             }
 
+            if let error = session.signInError {
+                Text(error)
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .multilineTextAlignment(.center)
+            }
+
+            if showAppPasswordForm {
+                appPasswordForm
+            } else {
+                oauthForm
+            }
+
+            Button(showAppPasswordForm ? "Use OAuth instead" : "Sign in with an app password instead") {
+                showAppPasswordForm.toggle()
+                session.clearSignInError()
+            }
+            .font(.footnote)
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: 420)
+    }
+
+    // MARK: - OAuth
+
+    private var oauthForm: some View {
+        VStack(spacing: 12) {
+            TextField("PDS host", text: $pdsURLString)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                .keyboardType(.URL)
+                #endif
+                .autocorrectionDisabled()
+                .textFieldStyle(.roundedBorder)
+
+            Button(action: submitOAuth) {
+                if session.isSigningIn {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                } else {
+                    Text("Sign in with Bluesky")
+                        .frame(maxWidth: .infinity)
+                }
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(pdsURL == nil || session.isSigningIn)
+        }
+    }
+
+    private func submitOAuth() {
+        guard let pdsURL else { return }
+        Task { await session.signInWithOAuth(pdsURL: pdsURL) }
+    }
+
+    // MARK: - App password
+
+    private var appPasswordForm: some View {
+        VStack(spacing: 12) {
             VStack(spacing: 12) {
                 TextField("Handle (you.bsky.social)", text: $identifier)
                     .textContentType(.username)
@@ -66,14 +132,7 @@ struct LoginView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
 
-            if let error = session.signInError {
-                Text(error)
-                    .font(.callout)
-                    .foregroundStyle(.red)
-                    .multilineTextAlignment(.center)
-            }
-
-            Button(action: submit) {
+            Button(action: submitAppPassword) {
                 if session.isSigningIn {
                     ProgressView()
                         .frame(maxWidth: .infinity)
@@ -85,14 +144,10 @@ struct LoginView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(!canSubmit)
-
-            Spacer()
         }
-        .padding(24)
-        .frame(maxWidth: 420)
     }
 
-    private func submit() {
+    private func submitAppPassword() {
         guard let pdsURL else { return }
         Task {
             await session.signIn(

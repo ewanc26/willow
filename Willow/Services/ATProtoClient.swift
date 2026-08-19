@@ -12,6 +12,7 @@
 import Foundation
 import os
 import ATProtoKit
+import CryptoKit
 
 final class ATProtoClient: AuthService, TimelineService, InteractionService {
 
@@ -23,6 +24,12 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
     /// The write-path helper (like/repost/createRecord), built from `atProtoKit`.
     private var bluesky: ATProtoBluesky?
 
+    /// Set once an OAuth sign-in completes. `atProtoKit`/`bluesky` stay `nil`
+    /// in that case — see `signInWithOAuth` — so any `TimelineService`/
+    /// `InteractionService` call correctly throws `.notSignedIn` rather than
+    /// silently using stale or absent credentials.
+    private var oauthTokens: OAuthTokens?
+
     init(persistence: SessionPersistence = SessionPersistence()) {
         self.persistence = persistence
     }
@@ -33,6 +40,10 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
         guard let stored = persistence.stored else {
             Log.auth.debug("No persisted session to restore.")
             return nil
+        }
+
+        if stored.isOAuth {
+            return try restoreOAuthSession(stored)
         }
 
         Log.auth.info("Restoring session for \(stored.account.handle, privacy: .public) at \(stored.pdsURL.absoluteString, privacy: .public)")
@@ -103,17 +114,125 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
         return account
     }
 
+    /// Restores an OAuth session's DID/handle from its persisted token store.
+    ///
+    /// This does not refresh or validate the access token against the
+    /// authorization server (there's no request pipeline to use it with yet —
+    /// see the type doc on `AuthService`), so a restored OAuth account may be
+    /// signed in only in the sense that Willow remembers who it is.
+    private func restoreOAuthSession(_ stored: SessionPersistence.Stored) throws -> Account? {
+        let store = OAuthTokenStore(identifier: stored.keychainID)
+        guard let tokens = try store.load() else {
+            Log.auth.debug("OAuth session pointer existed but its tokens are gone; clearing.")
+            persistence.clear()
+            return nil
+        }
+        self.oauthTokens = OAuthTokens(
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            expiresIn: 0,
+            subjectDID: tokens.subjectDID,
+            pdsURL: tokens.pdsURL,
+            authServer: OAuthServerMetadata(
+                issuer: tokens.authServerIssuer,
+                authorizationEndpoint: tokens.authorizationEndpoint,
+                tokenEndpoint: tokens.tokenEndpoint,
+                pushedAuthorizationRequestEndpoint: tokens.pushedAuthorizationRequestEndpoint
+            ),
+            dpopKeyIdentifier: stored.keychainID,
+            authServerNonce: nil
+        )
+        Log.auth.notice("Restored OAuth session for \(stored.account.handle, privacy: .public)")
+        return stored.account
+    }
+
+    /// Runs the AT Protocol OAuth flow and persists the resulting tokens.
+    ///
+    /// The returned `Account` is genuine — its DID comes straight from the
+    /// token response's `sub` claim — but see the `AuthService` doc comment:
+    /// nothing built on top of `atProtoKit`/`bluesky` works for it yet.
+    func signInWithOAuth(pdsURL: URL) async throws -> Account {
+        Log.auth.info("Starting OAuth sign-in at \(pdsURL.absoluteString, privacy: .public)")
+
+        let client = OAuthClient()
+        let tokens = try await client.signIn(pdsURL: pdsURL)
+        self.oauthTokens = tokens
+
+        let handle = await Self.resolveHandle(did: tokens.subjectDID, pdsURL: pdsURL)
+        let account = Account(did: tokens.subjectDID, handle: handle ?? tokens.subjectDID)
+
+        let store = OAuthTokenStore(identifier: tokens.dpopKeyIdentifier)
+        try store.save(OAuthTokenStore.StoredTokens(
+            accessToken: tokens.accessToken,
+            refreshToken: tokens.refreshToken,
+            subjectDID: tokens.subjectDID,
+            pdsURL: tokens.pdsURL,
+            authServerIssuer: tokens.authServer.issuer,
+            authorizationEndpoint: tokens.authServer.authorizationEndpoint,
+            tokenEndpoint: tokens.authServer.tokenEndpoint,
+            pushedAuthorizationRequestEndpoint: tokens.authServer.pushedAuthorizationRequestEndpoint
+        ))
+        persistence.save(keychainID: tokens.dpopKeyIdentifier, pdsURL: pdsURL, account: account, isOAuth: true)
+
+        Log.auth.notice("OAuth sign-in complete for \(account.did, privacy: .public)")
+        return account
+    }
+
+    /// Best-effort handle lookup for the OAuth account-creation display name —
+    /// `com.atproto.repo.describeRepo` is an unauthenticated, public read, so
+    /// this needs no DPoP proof. A failure here just leaves the handle showing
+    /// as the DID; it's cosmetic, not a sign-in failure.
+    private static func resolveHandle(did: String, pdsURL: URL) async -> String? {
+        var components = URLComponents(url: pdsURL.appending(path: "xrpc/com.atproto.repo.describeRepo"), resolvingAgainstBaseURL: false)
+        components?.queryItems = [URLQueryItem(name: "repo", value: did)]
+        guard let url = components?.url else { return nil }
+
+        do {
+            let (data, response) = try await URLSession.shared.data(from: url)
+            guard (response as? HTTPURLResponse)?.statusCode == 200,
+                  let json = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            return json["handle"] as? String
+        } catch {
+            return nil
+        }
+    }
+
     func signOut() async {
         Log.auth.info("Signing out.")
+        if let stored = persistence.stored, stored.isOAuth {
+            OAuthTokenStore(identifier: stored.keychainID).delete()
+            DPoPKeyStore(identifier: stored.keychainID).delete()
+        }
         persistence.clear()
         configuration = nil
         atProtoKit = nil
         bluesky = nil
+        oauthTokens = nil
     }
 
     // MARK: - InteractionService
 
     func like(uri: String, cid: String) async throws -> String {
+        if oauthTokens != nil {
+            return try await withOAuthTokens { tokens, dpopKey in
+                let record: [String: Any] = [
+                    "$type": "app.bsky.feed.like",
+                    "subject": ["uri": uri, "cid": cid],
+                    "createdAt": ISO8601DateFormatter().string(from: Date())
+                ]
+                let body: [String: Any] = [
+                    "repo": tokens.subjectDID,
+                    "collection": "app.bsky.feed.like",
+                    "record": record
+                ]
+                let (json, updated) = try await OAuthXRPCClient.request(
+                    method: "POST", path: "com.atproto.repo.createRecord", body: body, tokens: tokens, dpopKey: dpopKey
+                )
+                guard let recordURI = json["uri"] as? String else { throw OAuthXRPCClient.XRPCError.invalidResponse }
+                Log.timeline.info("Liked \(uri, privacy: .public) via OAuth")
+                return (recordURI, updated)
+            }
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         let subject = ComAtprotoLexicon.Repository.StrongReference(recordURI: uri, cidHash: cid)
         let record = try await bluesky.createLikeRecord(subject)
@@ -122,12 +241,40 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
     }
 
     func unlike(likeURI: String) async throws {
+        if oauthTokens != nil {
+            try await withOAuthTokens { tokens, dpopKey -> (Void, OAuthTokens) in
+                let updated = try await Self.deleteRecord(likeURI, tokens: tokens, dpopKey: dpopKey)
+                Log.timeline.info("Unliked \(likeURI, privacy: .public) via OAuth")
+                return ((), updated)
+            }
+            return
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         try await bluesky.deleteRecord(.recordURI(atURI: likeURI))
         Log.timeline.info("Unliked \(likeURI, privacy: .public)")
     }
 
     func repost(uri: String, cid: String) async throws -> String {
+        if oauthTokens != nil {
+            return try await withOAuthTokens { tokens, dpopKey in
+                let record: [String: Any] = [
+                    "$type": "app.bsky.feed.repost",
+                    "subject": ["uri": uri, "cid": cid],
+                    "createdAt": ISO8601DateFormatter().string(from: Date())
+                ]
+                let body: [String: Any] = [
+                    "repo": tokens.subjectDID,
+                    "collection": "app.bsky.feed.repost",
+                    "record": record
+                ]
+                let (json, updated) = try await OAuthXRPCClient.request(
+                    method: "POST", path: "com.atproto.repo.createRecord", body: body, tokens: tokens, dpopKey: dpopKey
+                )
+                guard let recordURI = json["uri"] as? String else { throw OAuthXRPCClient.XRPCError.invalidResponse }
+                Log.timeline.info("Reposted \(uri, privacy: .public) via OAuth")
+                return (recordURI, updated)
+            }
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         let subject = ComAtprotoLexicon.Repository.StrongReference(recordURI: uri, cidHash: cid)
         let record = try await bluesky.createRepostRecord(subject)
@@ -136,14 +283,47 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
     }
 
     func removeRepost(repostURI: String) async throws {
+        if oauthTokens != nil {
+            try await withOAuthTokens { tokens, dpopKey -> (Void, OAuthTokens) in
+                let updated = try await Self.deleteRecord(repostURI, tokens: tokens, dpopKey: dpopKey)
+                Log.timeline.info("Removed repost \(repostURI, privacy: .public) via OAuth")
+                return ((), updated)
+            }
+            return
+        }
         guard let bluesky else { throw AuthError.notSignedIn }
         try await bluesky.deleteRecord(.recordURI(atURI: repostURI))
         Log.timeline.info("Removed repost \(repostURI, privacy: .public)")
     }
 
+    private static func deleteRecord(_ recordURI: String, tokens: OAuthTokens, dpopKey: P256.Signing.PrivateKey) async throws -> OAuthTokens {
+        guard let parsed = OAuthXRPCClient.parseRecordURI(recordURI) else {
+            throw OAuthXRPCClient.XRPCError.invalidResponse
+        }
+        let body: [String: Any] = ["repo": parsed.repo, "collection": parsed.collection, "rkey": parsed.rkey]
+        let (_, updated) = try await OAuthXRPCClient.request(
+            method: "POST", path: "com.atproto.repo.deleteRecord", body: body, tokens: tokens, dpopKey: dpopKey
+        )
+        return updated
+    }
+
     // MARK: - TimelineService
 
     func homeTimeline(cursor: String?) async throws -> TimelinePage {
+        if oauthTokens != nil {
+            return try await withOAuthTokens { tokens, dpopKey in
+                var query: [String: String] = [:]
+                if let cursor { query["cursor"] = cursor }
+                let (json, updated) = try await OAuthXRPCClient.request(
+                    method: "GET", path: "app.bsky.feed.getTimeline", query: query, tokens: tokens, dpopKey: dpopKey
+                )
+                let feed = json["feed"] as? [[String: Any]] ?? []
+                let posts = feed.compactMap { ($0["post"] as? [String: Any]).flatMap(OAuthPostMapping.makePost) }
+                let page = TimelinePage(posts: posts, cursor: json["cursor"] as? String)
+                Log.timeline.info("Loaded \(posts.count) posts via OAuth (paging: \(cursor != nil, privacy: .public))")
+                return (page, updated)
+            }
+        }
         guard let atProtoKit else { throw AuthError.notSignedIn }
 
         do {
@@ -155,6 +335,34 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
             Log.timeline.error("Timeline fetch failed: \(error.localizedDescription, privacy: .public)")
             throw error
         }
+    }
+
+    // MARK: - OAuth request plumbing
+
+    /// Runs `body` against the current OAuth session's tokens and DPoP key,
+    /// then persists any nonce learned or token refreshed along the way —
+    /// centralized here so every OAuth-backed protocol method above gets that
+    /// bookkeeping for free instead of repeating it.
+    private func withOAuthTokens<T>(
+        _ body: (OAuthTokens, P256.Signing.PrivateKey) async throws -> (T, OAuthTokens)
+    ) async throws -> T {
+        guard let tokens = oauthTokens else { throw AuthError.notSignedIn }
+        let dpopKey = try DPoPKeyStore(identifier: tokens.dpopKeyIdentifier).key()
+        let (result, updated) = try await body(tokens, dpopKey)
+        oauthTokens = updated
+        if updated.accessToken != tokens.accessToken || updated.refreshToken != tokens.refreshToken {
+            try? OAuthTokenStore(identifier: updated.dpopKeyIdentifier).save(OAuthTokenStore.StoredTokens(
+                accessToken: updated.accessToken,
+                refreshToken: updated.refreshToken,
+                subjectDID: updated.subjectDID,
+                pdsURL: updated.pdsURL,
+                authServerIssuer: updated.authServer.issuer,
+                authorizationEndpoint: updated.authServer.authorizationEndpoint,
+                tokenEndpoint: updated.authServer.tokenEndpoint,
+                pushedAuthorizationRequestEndpoint: updated.authServer.pushedAuthorizationRequestEndpoint
+            ))
+        }
+        return result
     }
 
     // MARK: - Mapping
