@@ -19,15 +19,26 @@ struct TimelineView: View {
     @State private var loadError: String?
     @State private var hasLoadedOnce = false
     @State private var isComposePresented = false
+    @State private var path = NavigationPath()
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             content
                 .navigationTitle("Home")
+                .navigationDestination(for: ThreadDestination.self) { destination in
+                    ThreadView(postURI: destination.postURI, path: $path)
+                }
+                .navigationDestination(for: ProfileDestination.self) { destination in
+                    ProfileView(actor: destination.actor)
+                }
                 .toolbar {
                     ToolbarItem(placement: .primaryAction) {
                         Menu {
-                            Text("@\(account.handle)")
+                            Button {
+                                path.append(ProfileDestination(actor: account.did))
+                            } label: {
+                                Label("@\(account.handle)", systemImage: "person.crop.circle")
+                            }
                             Button("Sign Out", role: .destructive) {
                                 Task { await session.signOut() }
                             }
@@ -80,7 +91,9 @@ struct TimelineView: View {
                     PostRowView(
                         post: post,
                         onToggleLike: { Task { await toggleLike(on: post) } },
-                        onToggleRepost: { Task { await toggleRepost(on: post) } }
+                        onToggleRepost: { Task { await toggleRepost(on: post) } },
+                        onTapPost: { path.append(ThreadDestination(postURI: post.id)) },
+                        onTapAuthor: { path.append(ProfileDestination(actor: post.authorHandle)) }
                     )
                     .onAppear { loadMoreIfNeeded(currentItem: post) }
                 }
@@ -201,4 +214,15 @@ struct TimelineView: View {
             }
         }
     }
+}
+
+/// Navigation-path values for the two destinations reachable from a post
+/// row: its thread, and its author's profile. `Hashable` is all
+/// `navigationDestination(for:)` needs — no reason for a heavier type.
+struct ThreadDestination: Hashable {
+    let postURI: String
+}
+
+struct ProfileDestination: Hashable {
+    let actor: String
 }
