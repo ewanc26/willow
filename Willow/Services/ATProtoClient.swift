@@ -168,12 +168,18 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
 
         return TimelinePost(
             id: post.uri,
+            cid: post.cid,
             authorDisplayName: post.author.displayName,
             authorHandle: post.author.actorHandle,
             authorAvatarURL: post.author.avatarImageURL,
             text: record?.text ?? "",
             createdAt: record?.createdAt ?? post.indexedAt,
-            embed: post.embed.flatMap(makeEmbed(from:))
+            embed: post.embed.flatMap(makeEmbed(from:)),
+            replyCount: post.replyCount ?? 0,
+            repostCount: post.repostCount ?? 0,
+            likeCount: post.likeCount ?? 0,
+            likeURI: post.viewer?.likeURI,
+            repostURI: post.viewer?.repostURI
         )
     }
 

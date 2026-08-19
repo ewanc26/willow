@@ -65,8 +65,12 @@ struct TimelineView: View {
         } else {
             List {
                 ForEach(posts) { post in
-                    PostRowView(post: post)
-                        .onAppear { loadMoreIfNeeded(currentItem: post) }
+                    PostRowView(
+                        post: post,
+                        onToggleLike: { Task { await toggleLike(on: post) } },
+                        onToggleRepost: { Task { await toggleRepost(on: post) } }
+                    )
+                    .onAppear { loadMoreIfNeeded(currentItem: post) }
                 }
 
                 if isLoading {
@@ -130,6 +134,59 @@ struct TimelineView: View {
             self.cursor = page.cursor
         } catch {
             loadError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        }
+    }
+
+    // MARK: - Interactions
+
+    /// Applies the like/repost toggle optimistically, then reconciles with the
+    /// server; on failure the change is rolled back so the UI never shows a
+    /// state the server didn't actually record.
+    private func toggleLike(on post: TimelinePost) async {
+        guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+
+        if let likeURI = posts[index].likeURI {
+            posts[index].likeURI = nil
+            posts[index].likeCount = max(0, posts[index].likeCount - 1)
+            do {
+                try await session.interactionService.unlike(likeURI: likeURI)
+            } catch {
+                posts[index].likeURI = likeURI
+                posts[index].likeCount += 1
+            }
+        } else {
+            posts[index].likeURI = "" // placeholder so a rapid second tap can't double-fire
+            posts[index].likeCount += 1
+            do {
+                posts[index].likeURI = try await session.interactionService.like(uri: post.id, cid: post.cid)
+            } catch {
+                posts[index].likeURI = nil
+                posts[index].likeCount = max(0, posts[index].likeCount - 1)
+            }
+        }
+    }
+
+    private func toggleRepost(on post: TimelinePost) async {
+        guard let index = posts.firstIndex(where: { $0.id == post.id }) else { return }
+
+        if let repostURI = posts[index].repostURI {
+            posts[index].repostURI = nil
+            posts[index].repostCount = max(0, posts[index].repostCount - 1)
+            do {
+                try await session.interactionService.removeRepost(repostURI: repostURI)
+            } catch {
+                posts[index].repostURI = repostURI
+                posts[index].repostCount += 1
+            }
+        } else {
+            posts[index].repostURI = ""
+            posts[index].repostCount += 1
+            do {
+                posts[index].repostURI = try await session.interactionService.repost(uri: post.id, cid: post.cid)
+            } catch {
+                posts[index].repostURI = nil
+                posts[index].repostCount = max(0, posts[index].repostCount - 1)
+            }
         }
     }
 }
