@@ -14,7 +14,7 @@ import os
 import ATProtoKit
 import CryptoKit
 
-final class ATProtoClient: AuthService, TimelineService, InteractionService {
+final class ATProtoClient: AuthService, TimelineService, InteractionService, NotificationService {
 
     private let persistence: SessionPersistence
 
@@ -335,6 +335,57 @@ final class ATProtoClient: AuthService, TimelineService, InteractionService {
             Log.timeline.error("Timeline fetch failed: \(error.localizedDescription, privacy: .public)")
             throw error
         }
+    }
+
+    // MARK: - NotificationService
+
+    // OAuth sessions don't route through here yet — same known gap as the
+    // rest of `TimelineService`/`InteractionService` before `OAuthXRPCClient`
+    // grows a notifications path; `.notSignedIn` is correct in the meantime
+    // rather than silently doing nothing.
+
+    func listNotifications(cursor: String?) async throws -> NotificationPage {
+        guard let atProtoKit else { throw AuthError.notSignedIn }
+
+        do {
+            let output = try await atProtoKit.listNotifications(cursor: cursor)
+            let notifications = output.notifications.map(Self.makeNotification(from:))
+            Log.notifications.info("Loaded \(notifications.count) notifications (paging: \(cursor != nil, privacy: .public))")
+            return NotificationPage(notifications: notifications, cursor: output.cursor)
+        } catch {
+            Log.notifications.error("Notification fetch failed: \(error.localizedDescription, privacy: .public)")
+            throw error
+        }
+    }
+
+    func markNotificationsSeen() async throws {
+        guard let atProtoKit else { throw AuthError.notSignedIn }
+        try await atProtoKit.updateSeen()
+        Log.notifications.info("Marked notifications seen.")
+    }
+
+    private nonisolated static func makeNotification(from item: AppBskyLexicon.Notification.Notification) -> AppNotification {
+        let reason: AppNotification.Reason
+        switch item.reason {
+        case .like: reason = .like
+        case .repost: reason = .repost
+        case .follow: reason = .follow
+        case .mention: reason = .mention
+        case .reply: reason = .reply
+        case .quote: reason = .quote
+        default: reason = .other(item.reason.rawValue)
+        }
+
+        return AppNotification(
+            id: item.uri,
+            reason: reason,
+            authorDisplayName: item.author.displayName,
+            authorHandle: item.author.actorHandle,
+            authorAvatarURL: item.author.avatarImageURL,
+            reasonSubjectURI: item.reasonSubjectURI,
+            isRead: item.isRead,
+            indexedAt: item.indexedAt
+        )
     }
 
     // MARK: - OAuth request plumbing

@@ -24,7 +24,13 @@ struct ContentView: View {
             LoginView()
 
         case .signedIn(let account):
-            TimelineView(account: account)
+            TabView {
+                TimelineView(account: account)
+                    .tabItem { Label("Home", systemImage: "house") }
+
+                NotificationsView()
+                    .tabItem { Label("Notifications", systemImage: "bell") }
+            }
         }
     }
 }

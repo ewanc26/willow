@@ -17,4 +17,5 @@ import os
 enum Log {
     nonisolated static let auth = Logger(subsystem: "uk.ewancroft.Willow", category: "auth")
     nonisolated static let timeline = Logger(subsystem: "uk.ewancroft.Willow", category: "timeline")
+    nonisolated static let notifications = Logger(subsystem: "uk.ewancroft.Willow", category: "notifications")
 }
