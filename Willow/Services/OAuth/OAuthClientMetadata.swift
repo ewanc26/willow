@@ -23,7 +23,14 @@ enum OAuthClientMetadata {
     /// needing associated-domains/universal-link infrastructure just to catch
     /// a redirect. Must be registered as a URL type in Info.plist and match
     /// what `ASWebAuthenticationSession` is told to listen for.
-    static let redirectURI = URL(string: "uk.ewancroft.willow://oauth/callback")!
+    ///
+    /// Single slash after the scheme, not double: RFC 8252 §7.1 requires a
+    /// private-use URI scheme redirect in the form `<scheme>:/{path}`, and
+    /// Bluesky's authorization server enforces this — confirmed live
+    /// (`uk.ewancroft.willow://oauth/callback` was rejected with
+    /// `invalid_request` at PAR; `parseCallback` only reads query items, so
+    /// dropping the second slash doesn't affect callback parsing).
+    static let redirectURI = URL(string: "uk.ewancroft.willow:/oauth/callback")!
     static let callbackURLScheme = "uk.ewancroft.willow"
 
     /// The document `clientID` must serve verbatim.

@@ -46,14 +46,28 @@ enum OAuthDiscovery {
         return try await fetchAuthorizationServerMetadata(issuer: authServerIssuer)
     }
 
+    /// Resolves the authorization server that protects `pdsURL`.
+    ///
+    /// Most PDSes are a distinct resource server that points at a separate
+    /// authorization server via `oauth-protected-resource`. But some hosts —
+    /// notably `bsky.social`, Bluesky's own entryway — serve as their *own*
+    /// authorization server and don't publish `oauth-protected-resource` at
+    /// all (confirmed: `curl -I https://bsky.social/.well-known/oauth-protected-resource`
+    /// is a 404, while `.../.well-known/oauth-authorization-server` is a 200
+    /// on that same host). Treat a missing/404 protected-resource document as
+    /// "this host is the authorization server" rather than a hard failure.
     private static func resolveProtectedResourceIssuer(pdsURL: URL) async throws -> URL {
         let metadataURL = pdsURL.appending(path: ".well-known/oauth-protected-resource")
-        let json = try await fetchJSON(metadataURL)
-        guard let issuerString = json["authorization_servers"] as? [String], let first = issuerString.first,
-              let issuer = URL(string: first) else {
-            throw OAuthDiscoveryError.missingField("authorization_servers")
+        do {
+            let json = try await fetchJSON(metadataURL)
+            guard let issuerString = json["authorization_servers"] as? [String], let first = issuerString.first,
+                  let issuer = URL(string: first) else {
+                throw OAuthDiscoveryError.missingField("authorization_servers")
+            }
+            return issuer
+        } catch OAuthDiscoveryError.httpError(404) {
+            return pdsURL
         }
-        return issuer
     }
 
     private static func fetchAuthorizationServerMetadata(issuer: URL) async throws -> OAuthServerMetadata {
