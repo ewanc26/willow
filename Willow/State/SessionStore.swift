@@ -37,6 +37,7 @@ final class SessionStore {
     var timelineService: TimelineService { client }
     var interactionService: InteractionService { client }
     var notificationService: NotificationService { client }
+    var composeService: ComposeService { client }
 
     /// Called once at launch to restore any persisted session.
     func bootstrap() async {
