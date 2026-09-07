@@ -1,72 +1,196 @@
-# AGENTS.md
+#AGENTS.md
 
-Guidance for agents working on Willow, a native SwiftUI **Bluesky / AT Protocol** client targeting iOS and macOS from one shared codebase.
+Guidance for AI coding agents working in this repository. Human contributors
+may find it useful too, but the audience is agents.
 
-Read this in full before making changes. Where it conflicts with what the code actually does, the code wins — update this file to match reality rather than letting it drift.
+## Project overview
 
-## Status — read first
+A native C/C++23 Minecraft: Java Edition server focused on predictable, low RAM
+usage. Zincfox is an experimental clean-room server implementation: the goal is
+not to clone the vanilla server architecture in C++, but to build the protocol,
+simulation, world and persistence layers around explicit ownership, bounded
+queues and measurable memory budgets from the start.
 
-The repository is still the **initial Xcode SwiftData template**: a `WillowApp` entry point, a placeholder `ContentView` listing `Item` records (a `@Model` with a single `timestamp`), and the default test targets. **None of the Bluesky functionality exists yet.** Treat `Item.swift` and the list UI in `ContentView.swift` as scaffolding to be replaced, not as an established pattern to imitate. A successful build proves the template compiles — nothing about login, feeds, or posting works or has been verified.
+- **Language:** C17 is available for small leaf components where it reduces
+  runtime/dependency surface; C++23 is the default for protocol, server,
+  storage, and world state. `snake_case` for functions and variables,
+  `PascalCase` for types.
+- **Build:** CMake, C17/C++23 strict by target, `-Wall -Wextra -Wpedantic
+  -Wconversion -Wsign-conversion`. Tests are per-file executables run through `ctest`,
+  following the account's other native repos (`clay/`, `wolfram/`, `keepsake/`).
+- **Target:** macOS and Linux desktop. Windows is untested (as elsewhere in this
+  account).
 
-## Repository map
+## Repository layout
 
-- `Willow/WillowApp.swift` — `@main` `App`, constructs the shared SwiftData `ModelContainer`. Currently registers only `Item`.
-- `Willow/ContentView.swift` — root view. Uses `#if os(macOS)` / `#if os(iOS)` to branch a `NavigationSplitView` (macOS) vs plain content (iOS); this inline-branching pattern is how cross-platform divergence should be handled.
-- `Willow/Item.swift` — placeholder SwiftData model.
-- `Willow/Willow.entitlements` — enables CloudKit and push (`aps-environment`). These are template defaults; confirm they are actually needed before building features on them rather than assuming they were a deliberate decision.
-- `Willow/Assets.xcassets`, `Info.plist` — app assets and configuration.
-- `WillowTests/` — unit tests using the **Swift Testing** framework (`@Test`, `#expect`), not XCTest.
-- `WillowUITests/` — UI tests using **XCUIAutomation**.
+```
+include/zincfox/       public/internal C/C++ interfaces
+src/protocol/          VarInt, framing, packet/state codecs
+src/server/            connection lifecycle and dispatch
+src/world/             world/chunk state (future)
+src/entity/            entity/player storage (future)
+src/storage/           region/persistence backends (future)
+test/                  unit and protocol regression tests
+docs/                  design notes and compatibility records
+```
 
-`Willow` is both the app name and the module name; keep them consistent. Add new source files to the `Willow` app target, and mirror non-trivial logic with tests in `WillowTests`.
+Dependency direction is inward from higher-level game/server code to small
+protocol/net abstractions. Do not let world/entity code call raw socket APIs.
 
-## Architecture and conventions
+## Module boundaries — read before editing
 
-- **SwiftUI-first.** Define UI in a view's `body`; conform views to `View`. Keep shared code shared and isolate platform differences behind `#if os(...)` rather than forking whole views per platform.
-- **No Combine.** Use Swift `async`/`await` and `AsyncSequence` throughout — `URLSession`'s async APIs, structured concurrency, `@MainActor` isolation for UI state. This is a hard house rule.
-- **State:** `@State private var` for local view state, `let` for constants. Lean on the type system; avoid force-unwrapping.
-- **Naming/formatting:** PascalCase types, camelCase members, 4-space indentation, clear method separation. Comment non-obvious logic only.
-- **Scope discipline.** Make only the change requested; do not reformat or refactor unrelated code, and inspect the worktree before editing so unrelated local work is preserved.
+- **Protocol code owns all wire-format parsing.** `src/protocol/` must stay
+  free of server lifecycle concerns;
+`src / server /` must stay free of game -
+        state concerns
+            .The boundary is the `protocol::handle_packet` dispatch interface.-
+        **Version -
+        specific packet definitions stay in `src /
+            protocol /`.**Transport and game systems must not accumulate packet
+                              IDs or
+    version checks.Put version tables /
+            codecs behind the protocol layer so supporting another Minecraft
+                release does not fork the whole server.-
+        **Connection state is owned by `src /
+            server /`.**The protocol layer sees only
+                            borrowed `std::span` payloads; it must not retain decoded packet objects
+  after dispatch.
+- **No global mutable server state.** A subsystem that owns a thread must
+  expose shutdown/join semantics and memory/queue bounds.
 
-## AT Protocol correctness and safety
+## Build and run
 
-These matter the moment real feature work begins; hold to them from the first networked line.
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+./build/zincfox [--port 1-65535]
+```
 
-- **DIDs identify repositories; handles are mutable.** Resolve handle → DID → PDS and key state by DID, never by handle. Support custom PDS hosts, not just `bsky.social`.
-- **Treat every PDS/AppView response as untrusted.** Parse defensively — a malformed record must never crash the client. Bound response sizes, string lengths, and pagination (cursors must terminate and stay bound to one DID/PDS). Rich-text facets use **UTF-8 byte offsets**, not `String`/UTF-16 offsets — a common and silent source of bugs.
-- **Preserve exact identifiers.** AT URIs, CIDs, and rkeys are contracts; validate a URI's DID, collection, and rkey before any update or delete. Never substitute a display handle for a DID.
-- **Auth & secrets.** Sessions come from `com.atproto.server.createSession`, refreshed via `com.atproto.server.refreshSession`. Store access/refresh tokens in the **Keychain** — never in SwiftData, `UserDefaults`, plaintext files, or logs. Provide a sign-out path that fully wipes session state. Never commit tokens, app passwords, `.env`, or captured authenticated traffic.
-- **Never fabricate success.** Do not return a "done" state for an endpoint or path that isn't actually implemented and verified.
+"Verified" means: clean build (zero warnings under the strict flags), `ctest`
+green, and — for anything touching the network path — a real client connection
+path for the claimed states with automated regression fixtures retained where
+licensing permits.
 
-### Talking to the network
+## Configuration
 
-Reads/writes live under the `app.bsky.*` and `com.atproto.*` lexicons (`app.bsky.feed.getTimeline`, `app.bsky.feed.getPostThread`, `app.bsky.notification.listNotifications`, `com.atproto.repo.createRecord` for `app.bsky.feed.post`). When behaviour isn't fully pinned down by the lexicon spec, cross-check against reference implementations rather than guessing:
+- **All configurable behavior belongs in the global `zincfox.conf` file.** Do
+  not add hidden environment flags, command-only switches, or per-module
+  configuration files for server behavior. A new setting must have a bounded
+  type/range, a documented default, load/save coverage, and an explanation of
+  its retained-memory or resource effect when relevant.
+- Configuration must never make an unbounded queue, cache, world, or player
+  store possible. Dynamic choices must resolve to one of documented finite
+  limits and select the safe lower limit when host information is unavailable.
 
-- **`bluesky-social/atproto`** (TypeScript) — canonical; the tiebreaker when implementations disagree, since the real PDS/AppView are built against it. Checked out locally at **`../atproto`**; its `lexicons/` directory (`app.bsky.*`, `com.atproto.*` JSON schemas) is the authoritative source for field names, required fields, and error codes — read the lexicon before choosing them, rather than guessing from generated names.
-- **`ATProtoKit`** (Swift) — the closest reference for a native Swift client: session handling, XRPC request shaping, and record types. Evaluate it as a dependency before hand-rolling XRPC.
-- **`../wolfram`** — Ewan's own C AT Protocol SDK powering the sibling console clients (`../channel-blue`, `../cobalt`). Not directly usable from Swift, but a consistent reference for how these problems were solved across the wider toolset.
+## Versioning
 
-Keep protocol-shaped code (session, XRPC, record (de)serialisation) behind a clear boundary so it stays testable and, where practical, reusable outside Willow's UI layer.
+- Releases use strict semantic versioning `v<major>.<minor>.<patch>`.
+- The version lives only in the `VERSION` line of `CMakeLists.txt`; derive any
+  runtime version string from that single source of truth, not a separate file.
+- **No version jumps**: bump from the immediately previous released version.
+  Never skip a patch, minor, or major number; do not backfill gaps with phantom
+  tags or releases.
+- **Substantial changes require a release cut**: a user-visible protocol or
+  gameplay behavior, persistence/world-format change, compatibility claim,
+  public interface change, or material resource-budget change must not be
+  allowed to accumulate indefinitely after a release. Before merging the next
+  substantial tranche, audit the commits since the latest tag and cut the next
+  sequential version when the tranche is ready. Documentation-only, test-only,
+  formatting, and internal refactors do not require a version cut unless they
+  change the published contract.
+- **Release procedure follows Wolfram**: change the single `VERSION` line,
+  create a signed annotated `v<major>.<minor>.<patch>` tag on that same commit
+  (falling back to an annotated tag only when signing is unavailable), push the
+  commit and tag, and create the matching GitHub release with generated notes.
+  For pre-1.0 releases, publish source only; attach built artifacts starting at
+  `v1.0.0`.
 
-## Working inside Xcode
+## Code style
 
-Prefer the `xcode-tools` MCP commands over shell and `xcodebuild`; raw `ls`/`find`/`cat` may each prompt the user, so use `XcodeGlob`/`XcodeGrep`/`XcodeRead`/`XcodeLS` for exploration.
+- Header guards (`ZINCFOX_PROTOCOL_<FILE>_HPP`), not `#pragma once` — matches
+  the convention in `wolfram/include/wolfram/` and `clay/include/clay/`.
+- `.clang-format` in this repo (LLVM base, 4-space indent, 80 columns,
+  attached braces) — run `clang-format -i` on changed files.
+- Comments explain *why*, sparingly; never narrate obvious code.
+- No C++ exceptions for expected protocol/server states. Use explicit
+  result/error types. Reserve exceptions/aborts for genuine programmer errors.
+- Avoid RTTI-heavy or virtual object hierarchies for packets/entities when
+  tagged values or tables are simpler.
 
-- **Build:** `BuildProject`.
-- **Fast per-file diagnostics:** `XcodeRefreshCodeIssuesInFile` — sanity-check edits before a full build.
-- **Try a snippet in context:** `RunCodeSnippet`.
-- **Tests:** `RunAllTests` / `RunSomeTests` (Swift Testing for units, XCUIAutomation for UI).
-- **Apple APIs:** `DocumentationSearch` — use liberally for SwiftUI, SwiftData, and anything newer than training data (Liquid Glass, FoundationModels, current SwiftUI navigation, etc.). Assume unfamiliar APIs are real and new; look them up rather than guessing.
+## Memory invariants
 
-Add or update a test for changed non-UI logic. A green build is not evidence that a networked or auth flow works — those need verification against a real PDS with a disposable account.
+The initial scaffold deliberately chooses simple fixed bounds:
 
-### Gotchas
+- 32 connection slots;
+- one 8 KiB receive buffer per slot;
+- one 128 KiB transmit buffer per slot (sized for one columnar 24-section
+  chunk frame with full sky light);
+- one small protocol / session record per slot;
+- one `pollfd` table for the listener plus those slots.
 
-- **macOS App Sandbox blocks the network by default.** The target is sandboxed (`ENABLE_APP_SANDBOX = YES`). Without the outgoing-connections entitlement, every request silently fails and surfaces in-app as "the server isn't responding" — even though the PDS is fine. This is controlled by the `ENABLE_OUTGOING_NETWORK_CONNECTIONS = YES` build setting (Signing & Capabilities → App Sandbox → **Outgoing Connections (Client)**), not by `Willow/Willow.entitlements`, which is currently **not wired into the build** (`CODE_SIGN_ENTITLEMENTS` is unset). To confirm what actually shipped, read the built app's entitlements: `codesign -d --entitlements - <App>`. A client app does not need Incoming Connections (Server).
-- **Reading Willow's logs.** Logging goes through `os.Logger` under subsystem `uk.ewancroft.Willow` (see `Services/Log.swift`), never logging passwords or tokens. Read with `log show --predicate 'subsystem == "uk.ewancroft.Willow"' --last 5m --info --debug` — `--info --debug` is required, as those levels aren't persisted by default.
+The fixed socket-buffer payload is therefore **4.25 MiB** at maximum connection
+capacity (32 slots x 136 KiB), plus small connection/poller metadata and
+operating-system socket buffers. This is not a promise that the process RSS is
+4.25 MiB, but it is the first explicit retained-memory budget owned by Zincfox
+itself.
 
-## Commits
+When adding a subsystem, document its steady-state and worst-case retained
+memory in the PR when practical.
 
-- Atomic conventional commits, one logical change each, scoped by area (`feat(feed)`, `fix(auth)`, `docs(agents)`). Don't mix a code change with a docs update.
-- **Honest attribution.** AI assistance is welcome; include a `Co-authored-by:` trailer for an AI agent when it materially contributed, matching the convention across Ewan's other repositories.
-- Don't stage build products (`build/`, DerivedData, `.app`/`.xctest` under `Products/`), secrets, or unrelated worktree changes.
+Every long-lived subsystem should answer four questions:
+
+1. What owns this memory?
+2. What is the normal retained size?
+3. What is the maximum retained size or eviction/backpressure rule?
+4. What input can cause the subsystem to grow?
+
+## Commits and pull requests
+
+Matches the convention in `wolfram/AGENTS.md` / `keepsake/AGENTS.md`.
+
+- **Atomic conventional commits**: every commit is exactly one logical change.
+  Scope by module — `feat(protocol)`, `feat(server)`, `fix(net)`,
+  `test(protocol)`, etc. Never combine a code change with a docs update, or
+  changes to two unrelated modules, in one commit. Write the message to explain
+  the reasoning, not just restate the file list. Split multi-concern work into
+  sequential commits instead.
+- **Metadata files may be updated directly on `main`.** This covers project-level
+  metadata and documentation such as `AGENTS.md`, `README.md`, `docs/**`, and
+  similar non-code files that guide how the repository is maintained.
+- **All other work lands via feature branches and pull requests.** Code,
+  tests, build scripts, and any behavioral change must be developed on a
+  dedicated `feat/<area>` or `fix/<area>` branch and merged through a PR so
+  review and CI run before it reaches `main`.
+- **Honest attribution**: commits may carry a `Co-authored-by:` trailer crediting
+  an AI agent, and may reference the specific model used, in the commit message,
+  a PR, or code comments — attribution should reflect who/what actually did the
+  work.
+- **No commented-out code** left in place; delete dead code or move it to a
+  test.
+
+## Issue tracking
+
+- **Track every discovered issue**: a bug, protocol mismatch, portability
+  defect, missing test, documentation inconsistency, or deferred compatibility
+  problem found during development or review must have a GitHub issue unless it
+  is fixed in the same atomic change and leaves no follow-up work.
+- Create issues with the repository templates under
+  `.github/ISSUE_TEMPLATE/` (`bug_report.yml` for defects and
+  `feature_request.yml` for requested behavior). Include the exact version or
+  commit, reproduction or evidence, affected protocol state, and relevant
+  test/CI output. Do not substitute private notes or an untracked TODO for a
+  reportable issue.
+- Link the issue from the implementing pull request and close it only when the
+  fix or explicitly scoped follow-up has been verified. Release audits must
+  review open issues before declaring a tranche complete.
+
+## Do not do these without explicit human sign-off
+
+- Add a JVM/Paper/Spigot server as the actual backend.
+- Copy Mojang proprietary server source or decompiled implementation code.
+- Add an unbounded network/task/chunk queue.
+- Replace protocol validation with permissive "best effort" parsing.
+- Introduce a dependency-heavy game/server framework.
+- Claim vanilla compatibility for a release without client/protocol tests.
+- Weaken warnings, sanitizers or tests merely to get CI green.
